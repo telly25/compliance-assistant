@@ -10,9 +10,10 @@ Endpoints :
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -44,6 +45,35 @@ app.add_middleware(
 
 STATIC_DIR = Path(__file__).parent / "static"
 
+# Patterns de prompt injection courants
+_INJECTION_RE = re.compile(
+    r"(ignore\s+(previous|all|prior)\s+instructions?"
+    r"|system\s*prompt"
+    r"|<\s*/?system\s*>"
+    r"|###\s*(system|instruction)"
+    r"|tu\s+es\s+maintenant"
+    r"|oublie\s+(tout|tes\s+instructions)"
+    r"|forget\s+(your|all|previous)\s+instructions?)",
+    re.IGNORECASE,
+)
+
+BLOCKED_UA = re.compile(r"(python-requests|curl|wget|scrapy|httpx|go-http|java/)", re.IGNORECASE)
+
+
+def _check_bot(request: Request) -> None:
+    ua = request.headers.get("user-agent", "")
+    if not ua or BLOCKED_UA.search(ua):
+        logger.warning("bot bloque ua=%r ip=%s", ua, request.client.host)
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _sanitize_question(q: str) -> str:
+    # Supprime les caractères de contrôle
+    q = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", q)
+    if _INJECTION_RE.search(q):
+        raise HTTPException(status_code=400, detail="Question non autorisée.")
+    return q.strip()
+
 
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=500)
@@ -66,6 +96,9 @@ def list_models():
 @app.post("/api/ask/stream")
 @limiter.limit("10/minute")
 def ask_stream(request: Request, req: AskRequest):
+    _check_bot(request)
+    req.question = _sanitize_question(req.question)
+
     # filter_source doit être une clé connue
     if req.filter_source and req.filter_source not in SOURCE_MAP:
         req.filter_source = None
