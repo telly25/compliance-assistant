@@ -31,7 +31,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("regwatch")
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["30/minute"])
-app = FastAPI(title="RegWatch")
+_IS_PROD = os.environ.get("LLM_MODE") == "mistral"
+
+app = FastAPI(
+    title="RegWatch",
+    # Désactive la doc OpenAPI en production (évite d'exposer la structure de l'API)
+    docs_url=None if _IS_PROD else "/docs",
+    redoc_url=None if _IS_PROD else "/redoc",
+    openapi_url=None if _IS_PROD else "/openapi.json",
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -42,6 +50,24 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline'; "
+        "connect-src 'self'; "
+        "img-src 'self' data:; "
+        "frame-ancestors 'none';"
+    )
+    return response
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -75,9 +101,12 @@ def _sanitize_question(q: str) -> str:
     return q.strip()
 
 
+ALLOWED_MODELS = {MISTRAL_MODEL, LM_STUDIO_MODEL}
+
+
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=500)
-    model: str | None = None
+    model: str | None = Field(default=None, max_length=80)
     n_results: int = Field(default=N_RESULTS, ge=1, le=10)
     filter_source: str | None = None
 
@@ -98,6 +127,8 @@ def list_models():
 def ask_stream(request: Request, req: AskRequest):
     _check_bot(request)
     req.question = _sanitize_question(req.question)
+    if req.model and req.model not in ALLOWED_MODELS:
+        raise HTTPException(status_code=400, detail="Modèle non autorisé.")
 
     # filter_source doit être une clé connue
     if req.filter_source and req.filter_source not in SOURCE_MAP:
