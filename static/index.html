@@ -67,8 +67,10 @@
       border-radius: 999px;
       letter-spacing: 0.3px;
     }
-    .pill-rgpd { background: rgba(59,130,246,.18); color: #93c5fd; }
-    .pill-dora { background: rgba(249,115,22,.18); color: #fdba74; }
+    .pill-rgpd  { background: rgba(59,130,246,.18); color: #93c5fd; }
+    .pill-dora  { background: rgba(249,115,22,.18); color: #fdba74; }
+    .pill-nis2  { background: rgba(16,185,129,.18); color: #6ee7b7; }
+    .pill-aiact { background: rgba(168,85,247,.18);  color: #d8b4fe; }
 
     #model-badge {
       font-size: 0.72rem;
@@ -168,8 +170,10 @@
       border-radius: 999px;
       border: 1px solid;
     }
-    .source-tag.rgpd { color: var(--rgpd); border-color: #bfdbfe; background: #eff6ff; }
-    .source-tag.dora { color: var(--dora); border-color: #fed7aa; background: #fff7ed; }
+    .source-tag.rgpd  { color: var(--rgpd); border-color: #bfdbfe; background: #eff6ff; }
+    .source-tag.dora  { color: var(--dora); border-color: #fed7aa; background: #fff7ed; }
+    .source-tag.nis2  { color: #10b981;     border-color: #a7f3d0; background: #ecfdf5; }
+    .source-tag.aiact { color: #a855f7;     border-color: #e9d5ff; background: #faf5ff; }
 
     .thinking-label { font-size: 0.78rem; color: var(--muted); font-style: italic; }
 
@@ -258,6 +262,8 @@
     <div class="sources-pills">
       <span class="pill pill-rgpd">RGPD</span>
       <span class="pill pill-dora">DORA</span>
+      <span class="pill pill-nis2">NIS2</span>
+      <span class="pill pill-aiact">AI Act</span>
     </div>
     <span id="model-badge">chargement…</span>
   </div>
@@ -331,7 +337,8 @@
   sendBtn.addEventListener('click', submit)
 
   function sourceClass(source) {
-    return source?.toLowerCase() === 'dora' ? 'dora' : 'rgpd'
+    const map = { 'dora': 'dora', 'nis2': 'nis2', 'ai act': 'aiact' }
+    return map[source?.toLowerCase()] || 'rgpd'
   }
 
   function addMsg(role, text = '') {

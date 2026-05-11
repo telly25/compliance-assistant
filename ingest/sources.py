@@ -17,6 +17,16 @@ SOURCES: dict[str, dict] = {
         "full_name": "Digital Operational Resilience Act",
         "celex": "32022R2554",
     },
+    "nis2": {
+        "name": "NIS2",
+        "full_name": "Directive sur la sécurité des réseaux et des systèmes d'information",
+        "celex": "32022L2555",
+    },
+    "aiact": {
+        "name": "AI Act",
+        "full_name": "Règlement sur l'Intelligence Artificielle",
+        "celex": "32024R1689",
+    },
 }
 
 
