@@ -29,8 +29,8 @@ STATIC_DIR = Path(__file__).parent / "static"
 def _get_client() -> tuple[OpenAI, str]:
     if LLM_MODE == "mistral":
         key = os.environ.get("MISTRAL_API_KEY", "")
-        return OpenAI(base_url=MISTRAL_URL, api_key=key), MISTRAL_MODEL
-    return OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio"), LM_STUDIO_MODEL
+        return OpenAI(base_url=MISTRAL_URL, api_key=key, timeout=120.0), MISTRAL_MODEL
+    return OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio", timeout=120.0), LM_STUDIO_MODEL
 
 
 from pydantic import BaseModel

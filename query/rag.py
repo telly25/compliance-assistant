@@ -66,9 +66,9 @@ def _get_client(model_override: str | None = None) -> tuple[OpenAI, str]:
         key = os.environ.get("MISTRAL_API_KEY")
         if not key:
             raise EnvironmentError("MISTRAL_API_KEY manquant.")
-        return OpenAI(base_url=MISTRAL_URL, api_key=key), model_override or MISTRAL_MODEL
+        return OpenAI(base_url=MISTRAL_URL, api_key=key, timeout=120.0), model_override or MISTRAL_MODEL
     else:
-        return OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio"), model_override or LM_STUDIO_MODEL
+        return OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio", timeout=120.0), model_override or LM_STUDIO_MODEL
 
 
 def build_context(hits: list[dict]) -> str:
