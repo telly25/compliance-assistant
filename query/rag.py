@@ -17,7 +17,7 @@ from openai import OpenAI
 from ingest.embed import search
 
 # Modele charge dans LM Studio — adapter au modele que tu as charge
-LM_STUDIO_MODEL = os.environ.get("LM_MODEL", "mistral")
+LM_STUDIO_MODEL = os.environ.get("LM_MODEL", "qwen/qwen3.5-9b")
 LM_STUDIO_URL = os.environ.get("LM_URL", "http://localhost:1234/v1")
 MAX_TOKENS = 1024
 N_RESULTS = 3
@@ -102,29 +102,31 @@ def ask(
 
     print("[...] Generation en cours...\n")
 
+    # /no_think desactive le mode reflexion interne de Qwen3
+    # (sinon la reponse est vide car tout part dans reasoning_content)
+    user_message = (
+        f"Voici les extraits du RGPD pertinents pour ta reponse :\n\n"
+        f"{context}\n\n"
+        "---\n"
+        f"Question : {question} /no_think"
+    )
+
     stream = client.chat.completions.create(
         model=model,
         max_tokens=MAX_TOKENS,
         stream=True,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    f"Voici les extraits du RGPD pertinents pour ta reponse :\n\n"
-                    f"{context}\n\n"
-                    "---\n"
-                    f"Question : {question}"
-                ),
-            },
+            {"role": "user", "content": user_message},
         ],
     )
 
     answer_parts = []
     for chunk in stream:
         delta = chunk.choices[0].delta.content or ""
-        print(delta, end="", flush=True)
-        answer_parts.append(delta)
+        if delta:
+            print(delta, end="", flush=True)
+            answer_parts.append(delta)
     print()
 
     return RAGResponse(
