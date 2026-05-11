@@ -15,7 +15,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -109,6 +109,11 @@ class AskRequest(BaseModel):
     model: str | None = Field(default=None, max_length=80)
     n_results: int = Field(default=N_RESULTS, ge=1, le=10)
     filter_source: str | None = None
+
+
+@app.get("/favicon.svg")
+def favicon():
+    return FileResponse(STATIC_DIR / "favicon.svg", media_type="image/svg+xml")
 
 
 @app.get("/", response_class=HTMLResponse)
