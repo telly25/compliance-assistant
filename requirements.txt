@@ -1,16 +1,13 @@
-# Scraping (Playwright nécessaire car EUR-Lex est protégé par WAF)
+# Scraping (ingestion locale uniquement)
 playwright>=1.44.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
 
-# Embeddings (modèle multilingue ~400 Mo, téléchargé automatiquement)
-sentence-transformers>=3.0.0
+# Embeddings via Mistral API (remplace sentence-transformers)
+openai>=1.30.0
 
 # Vector store local
 chromadb>=0.5.0
-
-# LM Studio (API locale compatible OpenAI)
-openai>=1.30.0
 
 # API web
 fastapi>=0.111.0

@@ -1,10 +1,12 @@
 """
-Pipeline RAG : retrieval semantique + generation via LM Studio (local).
+Pipeline RAG : retrieval semantique + generation.
 
-LM Studio expose une API compatible OpenAI sur http://localhost:1234/v1.
-Aucune cle API ni connexion internet requise pour la generation.
+En local  : LM Studio (http://localhost:1234/v1)
+En prod   : Mistral API (https://api.mistral.ai/v1)
 
-Pour changer de modele : modifier LM_STUDIO_MODEL ou passer model= a ask().
+La variable LLM_MODE determine le mode :
+  - "local"  (defaut) : LM Studio
+  - "mistral"         : Mistral API (necessite MISTRAL_API_KEY)
 """
 
 from __future__ import annotations
@@ -16,11 +18,19 @@ from openai import OpenAI
 
 from ingest.embed import search
 
-# Modele charge dans LM Studio — adapter au modele que tu as charge
+# ── Configuration ─────────────────────────────────────────────────────────────
+LLM_MODE = os.environ.get("LLM_MODE", "local")  # "local" ou "mistral"
+
+# Local (LM Studio)
 LM_STUDIO_MODEL = os.environ.get("LM_MODEL", "mistralai/ministral-3-3b")
-LM_STUDIO_URL = os.environ.get("LM_URL", "http://localhost:1234/v1")
+LM_STUDIO_URL   = os.environ.get("LM_URL",   "http://localhost:1234/v1")
+
+# Mistral API
+MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-small-latest")
+MISTRAL_URL   = "https://api.mistral.ai/v1"
+
 MAX_TOKENS = 1024
-N_RESULTS = 3
+N_RESULTS  = 3
 
 SYSTEM_PROMPT = """\
 Tu es un assistant expert en conformite reglementaire europeenne, specialise dans \
@@ -29,8 +39,7 @@ et l'AI Act (UE 2024/1689).
 
 Tes reponses sont structurees, precises et operationnelles. Tu cites toujours \
 les articles pertinents avec leur source (RGPD, DORA, NIS2 ou AI Act). \
-Tu n'inventes pas d'obligations qui n'existent pas dans \
-les textes fournis.
+Tu n'inventes pas d'obligations qui n'existent pas dans les textes fournis.
 
 Format de reponse :
 1. **Synthese** - resume en 2-3 phrases
@@ -39,6 +48,8 @@ Format de reponse :
 4. **Articles de reference** - numeros et titres des articles cites
 5. **Points d'attention** - risques ou zones grises eventuels
 """
+
+SOURCE_MAP = {"rgpd": "RGPD", "dora": "DORA", "nis2": "NIS2", "aiact": "AI Act"}
 
 
 @dataclass
@@ -49,17 +60,28 @@ class RAGResponse:
     output_tokens: int
 
 
+def _get_client(model_override: str | None = None) -> tuple[OpenAI, str]:
+    """Retourne (client, model) selon le mode configuré."""
+    if LLM_MODE == "mistral":
+        key = os.environ.get("MISTRAL_API_KEY")
+        if not key:
+            raise EnvironmentError("MISTRAL_API_KEY manquant.")
+        return OpenAI(base_url=MISTRAL_URL, api_key=key), model_override or MISTRAL_MODEL
+    else:
+        return OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio"), model_override or LM_STUDIO_MODEL
+
+
 def build_context(hits: list[dict]) -> str:
     parts = []
     for h in hits:
         meta = h["metadata"]
         label = (
-            f"Article {meta['number']} - {meta['title']}"
+            f"[{meta['source']}] Article {meta['number']} - {meta['title']}"
             if meta["type"] == "article"
-            else f"Considerant {meta['number']}"
+            else f"[{meta['source']}] Considerant {meta['number']}"
         )
         if meta.get("chapter"):
-            label += f" (Chapitre {meta['chapter']} : {meta['chapter_title']})"
+            label += f" (Chapitre {meta['chapter']})"
         parts.append(f"### {label}\n{h['text']}")
     return "\n\n".join(parts)
 
@@ -67,88 +89,69 @@ def build_context(hits: list[dict]) -> str:
 def ask(
     question: str,
     n_results: int = N_RESULTS,
-    filter_type: str | None = None,
     filter_source: str | None = None,
     verbose: bool = False,
     model: str | None = None,
+    stream_callback=None,
 ) -> RAGResponse:
     """Pose une question au pipeline RAG.
 
     Args:
-        question    : question en langage naturel
-        n_results   : nombre d'extraits RGPD recuperes
-        filter_type : restreindre a "article" ou "recital"
-        verbose     : affiche les sources dans le terminal
-        model       : nom du modele charge dans LM Studio
-
-    Returns:
-        RAGResponse avec la reponse et les tokens utilises
+        question        : question en langage naturel
+        n_results       : nombre d'extraits recuperes
+        filter_source   : filtrer par referentiel (rgpd, dora, nis2, aiact)
+        verbose         : affiche les sources dans le terminal
+        model           : surcharge le modele par defaut
+        stream_callback : fonction appelee pour chaque token (optionnel)
     """
-    model = model or LM_STUDIO_MODEL
-
-    # 1. Retrieval semantique
-    source_map = {"rgpd": "RGPD", "dora": "DORA"}
-    hits = search(
-        question,
-        n_results=n_results,
-        filter_source=source_map.get(filter_source) if filter_source else None,
-    )
+    # 1. Retrieval
+    fs = SOURCE_MAP.get(filter_source) if filter_source else None
+    hits = search(question, n_results=n_results, filter_source=fs)
     context = build_context(hits)
 
     if verbose:
         print("\n-- Sources recuperees --")
         for h in hits:
             meta = h["metadata"]
-            label = (
-                f"Article {meta['number']}"
-                if meta["type"] == "article"
-                else f"Considerant {meta['number']}"
-            )
-            print(f"  [{h['id']}] {label} (score={1 - h['distance']:.3f})")
+            label = f"Article {meta['number']}" if meta["type"] == "article" else f"Considerant {meta['number']}"
+            print(f"  [{meta['source']}] {label} (score={1 - h['distance']:.3f})")
         print()
 
-    # 2. Generation via LM Studio (streaming pour afficher mot par mot)
-    client = OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio")
-
-    print("[...] Generation en cours...\n")
-
-    # /no_think desactive le mode reflexion interne de Qwen3
-    # (sinon la reponse est vide car tout part dans reasoning_content)
+    # 2. Generation
+    client, active_model = _get_client(model)
     user_message = (
-        f"Voici les extraits du RGPD pertinents pour ta reponse :\n\n"
-        f"{context}\n\n"
-        "---\n"
-        f"Question : {question} /no_think"
+        f"Voici les extraits reglementaires pertinents :\n\n"
+        f"{context}\n\n---\n"
+        f"Question : {question}"
     )
 
+    print("[...] Generation en cours...\n")
     stream = client.chat.completions.create(
-        model=model,
+        model=active_model,
         max_tokens=MAX_TOKENS,
         stream=True,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
+            {"role": "user",   "content": user_message},
         ],
     )
 
     answer_parts = []
-    thinking_shown = False
     for chunk in stream:
         delta = chunk.choices[0].delta
         content = delta.content or ""
-        # Qwen3 met sa reflexion dans reasoning_content avant de repondre
         reasoning = getattr(delta, "reasoning_content", None) or ""
+        token = content or reasoning
 
-        if reasoning and not thinking_shown:
-            print("[reflexion en cours...]\n", flush=True)
-            thinking_shown = True
-
-        if content:
-            print(content, end="", flush=True)
-            answer_parts.append(content)
+        if token:
+            if stream_callback:
+                stream_callback(token, is_thinking=bool(reasoning and not content))
+            else:
+                print(token, end="", flush=True)
+            if content:
+                answer_parts.append(content)
 
     print()
-
     return RAGResponse(
         answer="".join(answer_parts),
         sources=hits,
@@ -158,9 +161,8 @@ def ask(
 
 
 def interactive_session(model: str | None = None) -> None:
-    """Lance une session de questions-reponses interactives."""
-    model = model or LM_STUDIO_MODEL
-    print(f"Assistant conformite RGPD | modele : {model} | {LM_STUDIO_URL}")
+    mode_label = f"Mistral API ({MISTRAL_MODEL})" if LLM_MODE == "mistral" else f"LM Studio ({LM_STUDIO_MODEL})"
+    print(f"RegWatch | {mode_label}")
     print("Tapez 'quitter' pour arreter.\n")
     while True:
         try:
@@ -178,4 +180,4 @@ def interactive_session(model: str | None = None) -> None:
         print("\n[...] Recherche en cours...\n")
         result = ask(question, verbose=True, model=model)
         print(result.answer)
-        print(f"\n[tokens] prompt={result.input_tokens} | completion={result.output_tokens}\n")
+        print()

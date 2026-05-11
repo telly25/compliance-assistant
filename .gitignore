@@ -7,8 +7,12 @@ venv/
 dist/
 build/
 
-# Données locales (volumineuses ou sensibles)
-data/
+# Données brutes et parsées (regenerables)
+data/raw/
+data/parsed/
+
+# ChromaDB est commite pour eviter de re-embedder en prod
+# data/chroma/  <- intentionnellement non ignore
 
 # Env
 .env

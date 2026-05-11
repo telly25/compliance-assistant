@@ -1,40 +1,46 @@
 """
-API FastAPI — compliance-assistant
+API FastAPI — RegWatch
 
 Endpoints :
-  GET  /                  -> sert l'interface web (static/index.html)
-  POST /api/ask           -> reponse complete JSON
-  POST /api/ask/stream    -> reponse en streaming (Server-Sent Events)
-  GET  /api/models        -> liste les modeles disponibles dans LM Studio
+  GET  /                  -> interface web
+  POST /api/ask/stream    -> reponse en streaming (SSE)
+  GET  /api/models        -> modele actif
 """
 
 import json
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
-from pydantic import BaseModel
 
-from query.rag import LM_STUDIO_MODEL, LM_STUDIO_URL, N_RESULTS, SYSTEM_PROMPT, build_context
+from query.rag import (
+    MISTRAL_MODEL, MISTRAL_URL, LM_STUDIO_MODEL, LM_STUDIO_URL,
+    LLM_MODE, N_RESULTS, SYSTEM_PROMPT, SOURCE_MAP, build_context
+)
 from ingest.embed import search
 
-app = FastAPI(title="Compliance Assistant RGPD")
+app = FastAPI(title="RegWatch")
 
 STATIC_DIR = Path(__file__).parent / "static"
-STATIC_DIR.mkdir(exist_ok=True)
 
 
-# ── Modèles de requête ────────────────────────────────────────────────────────
+def _get_client() -> tuple[OpenAI, str]:
+    if LLM_MODE == "mistral":
+        key = os.environ.get("MISTRAL_API_KEY", "")
+        return OpenAI(base_url=MISTRAL_URL, api_key=key), MISTRAL_MODEL
+    return OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio"), LM_STUDIO_MODEL
+
+
+from pydantic import BaseModel
 
 class AskRequest(BaseModel):
     question: str
-    model: str = LM_STUDIO_MODEL
+    model: str | None = None
     n_results: int = N_RESULTS
+    filter_source: str | None = None
 
-
-# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -43,51 +49,49 @@ def index():
 
 @app.get("/api/models")
 def list_models():
-    """Retourne les modeles charges dans LM Studio."""
-    try:
-        client = OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio")
-        models = client.models.list()
-        return {"models": [m.id for m in models.data]}
-    except Exception as e:
-        return {"models": [], "error": str(e)}
+    client, model = _get_client()
+    return {"models": [model], "mode": LLM_MODE}
 
 
 @app.post("/api/ask/stream")
 def ask_stream(req: AskRequest):
-    """Reponse en streaming (Server-Sent Events)."""
 
     def generate():
         # 1. Retrieval
-        hits = search(req.question, n_results=req.n_results)
+        fs = SOURCE_MAP.get(req.filter_source) if req.filter_source else None
+        hits = search(req.question, n_results=req.n_results, filter_source=fs)
         context = build_context(hits)
 
-        # Envoie les sources d'abord
         sources = [
             {
                 "id": h["id"],
                 "type": h["metadata"]["type"],
                 "number": h["metadata"]["number"],
                 "title": h["metadata"].get("title", ""),
+                "source": h["metadata"].get("source", ""),
                 "score": round(1 - h["distance"], 3),
             }
             for h in hits
         ]
         yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
 
-        # 2. Generation en streaming
-        client = OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio")
+        # 2. Generation
+        client, active_model = _get_client()
+        if req.model:
+            active_model = req.model
+
         user_message = (
-            f"Voici les extraits du RGPD pertinents :\n\n{context}\n\n---\n"
-            f"Question : {req.question} /no_think"
+            f"Voici les extraits reglementaires pertinents :\n\n{context}\n\n---\n"
+            f"Question : {req.question}"
         )
 
         stream = client.chat.completions.create(
-            model=req.model,
+            model=active_model,
             max_tokens=1024,
             stream=True,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
+                {"role": "user",   "content": user_message},
             ],
         )
 
@@ -96,10 +100,8 @@ def ask_stream(req: AskRequest):
             content = delta.content or ""
             reasoning = getattr(delta, "reasoning_content", None) or ""
 
-            # Reponse finale (Mistral, LLaMA, etc.)
             if content:
                 yield f"data: {json.dumps({'type': 'token', 'token': content})}\n\n"
-            # Reflexion interne Qwen3 — envoyee separement pour affichage discret
             elif reasoning:
                 yield f"data: {json.dumps({'type': 'thinking'})}\n\n"
 
