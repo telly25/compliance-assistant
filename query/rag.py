@@ -17,7 +17,7 @@ from openai import OpenAI
 from ingest.embed import search
 
 # Modele charge dans LM Studio — adapter au modele que tu as charge
-LM_STUDIO_MODEL = os.environ.get("LM_MODEL", "qwen/qwen3.5-9b")
+LM_STUDIO_MODEL = os.environ.get("LM_MODEL", "mistralai/ministral-3-3b")
 LM_STUDIO_URL = os.environ.get("LM_URL", "http://localhost:1234/v1")
 MAX_TOKENS = 1024
 N_RESULTS = 3
