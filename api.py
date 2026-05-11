@@ -8,12 +8,17 @@ Endpoints :
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from query.rag import (
     MISTRAL_MODEL, LM_STUDIO_MODEL, LM_STUDIO_URL,
@@ -21,14 +26,29 @@ from query.rag import (
 )
 from ingest.embed import search
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("regwatch")
+
+limiter = Limiter(key_func=get_remote_address, default_limits=["30/minute"])
 app = FastAPI(title="RegWatch")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
+
 STATIC_DIR = Path(__file__).parent / "static"
 
 
 class AskRequest(BaseModel):
-    question: str
+    question: str = Field(..., min_length=1, max_length=500)
     model: str | None = None
-    n_results: int = N_RESULTS
+    n_results: int = Field(default=N_RESULTS, ge=1, le=10)
     filter_source: str | None = None
 
 
@@ -44,7 +64,13 @@ def list_models():
 
 
 @app.post("/api/ask/stream")
-def ask_stream(req: AskRequest):
+@limiter.limit("10/minute")
+def ask_stream(request: Request, req: AskRequest):
+    # filter_source doit être une clé connue
+    if req.filter_source and req.filter_source not in SOURCE_MAP:
+        req.filter_source = None
+
+    logger.info("question=%r source=%s ip=%s", req.question[:80], req.filter_source, request.client.host)
 
     def generate():
         # 1. Retrieval
