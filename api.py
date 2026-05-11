@@ -76,35 +76,24 @@ def ask_stream(req: AskRequest):
             {"role": "user",   "content": user_message},
         ]
 
+        from openai import OpenAI
         if LLM_MODE == "mistral":
-            # SDK officiel Mistral (streaming natif)
-            from mistralai import Mistral
             key = os.environ.get("MISTRAL_API_KEY", "")
-            client = Mistral(api_key=key)
-            with client.chat.stream(
-                model=active_model,
-                max_tokens=1024,
-                messages=messages,
-            ) as stream:
-                for event in stream:
-                    token = event.data.choices[0].delta.content or ""
-                    if token:
-                        yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+            client = OpenAI(base_url="https://api.mistral.ai/v1", api_key=key, timeout=120.0)
         else:
-            # LM Studio local (openai-compatible)
-            from openai import OpenAI
             client = OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio", timeout=120.0)
-            stream = client.chat.completions.create(
-                model=active_model, max_tokens=1024, stream=True, messages=messages
-            )
-            for chunk in stream:
-                delta = chunk.choices[0].delta
-                content = delta.content or ""
-                reasoning = getattr(delta, "reasoning_content", None) or ""
-                if content:
-                    yield f"data: {json.dumps({'type': 'token', 'token': content})}\n\n"
-                elif reasoning:
-                    yield f"data: {json.dumps({'type': 'thinking'})}\n\n"
+
+        stream = client.chat.completions.create(
+            model=active_model, max_tokens=1024, stream=True, messages=messages
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            content = delta.content or ""
+            reasoning = getattr(delta, "reasoning_content", None) or ""
+            if content:
+                yield f"data: {json.dumps({'type': 'token', 'token': content})}\n\n"
+            elif reasoning:
+                yield f"data: {json.dumps({'type': 'thinking'})}\n\n"
 
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
