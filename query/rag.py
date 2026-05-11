@@ -97,12 +97,15 @@ def ask(
             print(f"  [{h['id']}] {label} (score={1 - h['distance']:.3f})")
         print()
 
-    # 2. Generation via LM Studio (API OpenAI-compatible, 100% local)
+    # 2. Generation via LM Studio (streaming pour afficher mot par mot)
     client = OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio")
 
-    response = client.chat.completions.create(
+    print("[...] Generation en cours...\n")
+
+    stream = client.chat.completions.create(
         model=model,
         max_tokens=MAX_TOKENS,
+        stream=True,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -117,12 +120,18 @@ def ask(
         ],
     )
 
-    usage = response.usage
+    answer_parts = []
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content or ""
+        print(delta, end="", flush=True)
+        answer_parts.append(delta)
+    print()
+
     return RAGResponse(
-        answer=response.choices[0].message.content,
+        answer="".join(answer_parts),
         sources=hits,
-        input_tokens=usage.prompt_tokens if usage else 0,
-        output_tokens=usage.completion_tokens if usage else 0,
+        input_tokens=0,
+        output_tokens=0,
     )
 
 
