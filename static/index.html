@@ -80,6 +80,19 @@
       border-radius: 999px;
     }
 
+    #clear-btn {
+      display: flex; align-items: center; gap: 0.35rem;
+      font-size: 0.75rem; font-weight: 500;
+      color: #94a3b8;
+      background: transparent;
+      border: 1px solid #1e3a5f;
+      border-radius: 999px;
+      padding: 0.25rem 0.7rem;
+      cursor: pointer;
+      transition: color .15s, border-color .15s;
+    }
+    #clear-btn:hover { color: #fff; border-color: #475569; }
+
     /* ── Chat area ── */
     #chat {
       flex: 1;
@@ -265,6 +278,10 @@
       <span class="pill pill-nis2">NIS2</span>
       <span class="pill pill-aiact">AI Act</span>
     </div>
+    <button id="clear-btn" title="Nouvelle conversation">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.85"/></svg>
+        Nouveau
+      </button>
     <span id="model-badge">chargement…</span>
   </div>
 </header>
@@ -305,6 +322,16 @@
   const questionEl= document.getElementById('question')
   const sendBtn   = document.getElementById('send')
   const modelBadge= document.getElementById('model-badge')
+  const clearBtn  = document.getElementById('clear-btn')
+
+  clearBtn.addEventListener('click', () => {
+    // Supprime tous les messages sauf l'écran vide
+    Array.from(chat.children).forEach(el => { if (el !== empty) el.remove() })
+    empty.style.display = 'flex'
+    questionEl.value = ''
+    questionEl.style.height = 'auto'
+    questionEl.focus()
+  })
 
   let currentModel = null
 
