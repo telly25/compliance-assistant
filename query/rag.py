@@ -122,11 +122,21 @@ def ask(
     )
 
     answer_parts = []
+    thinking_shown = False
     for chunk in stream:
-        delta = chunk.choices[0].delta.content or ""
-        if delta:
-            print(delta, end="", flush=True)
-            answer_parts.append(delta)
+        delta = chunk.choices[0].delta
+        content = delta.content or ""
+        # Qwen3 met sa reflexion dans reasoning_content avant de repondre
+        reasoning = getattr(delta, "reasoning_content", None) or ""
+
+        if reasoning and not thinking_shown:
+            print("[reflexion en cours...]\n", flush=True)
+            thinking_shown = True
+
+        if content:
+            print(content, end="", flush=True)
+            answer_parts.append(content)
+
     print()
 
     return RAGResponse(
