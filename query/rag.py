@@ -19,8 +19,8 @@ from ingest.embed import search
 # Modele charge dans LM Studio — adapter au modele que tu as charge
 LM_STUDIO_MODEL = os.environ.get("LM_MODEL", "mistral")
 LM_STUDIO_URL = os.environ.get("LM_URL", "http://localhost:1234/v1")
-MAX_TOKENS = 2048
-N_RESULTS = 6
+MAX_TOKENS = 1024
+N_RESULTS = 3
 
 SYSTEM_PROMPT = """\
 Tu es un assistant expert en conformite reglementaire, specialise dans le RGPD \
