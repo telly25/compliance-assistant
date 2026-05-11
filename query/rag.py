@@ -67,7 +67,7 @@ def ask(
     n_results: int = N_RESULTS,
     filter_type: str | None = None,
     verbose: bool = False,
-    model: str = LM_STUDIO_MODEL,
+    model: str | None = None,
 ) -> RAGResponse:
     """Pose une question au pipeline RAG.
 
@@ -81,6 +81,8 @@ def ask(
     Returns:
         RAGResponse avec la reponse et les tokens utilises
     """
+    model = model or LM_STUDIO_MODEL
+
     # 1. Retrieval semantique
     hits = search(question, n_results=n_results, filter_type=filter_type)
     context = build_context(hits)
@@ -147,9 +149,10 @@ def ask(
     )
 
 
-def interactive_session() -> None:
+def interactive_session(model: str | None = None) -> None:
     """Lance une session de questions-reponses interactives."""
-    print(f"Assistant conformite RGPD | modele : {LM_STUDIO_MODEL} | {LM_STUDIO_URL}")
+    model = model or LM_STUDIO_MODEL
+    print(f"Assistant conformite RGPD | modele : {model} | {LM_STUDIO_URL}")
     print("Tapez 'quitter' pour arreter.\n")
     while True:
         try:
@@ -165,6 +168,6 @@ def interactive_session() -> None:
             continue
 
         print("\n[...] Recherche en cours...\n")
-        result = ask(question, verbose=True)
+        result = ask(question, verbose=True, model=model)
         print(result.answer)
         print(f"\n[tokens] prompt={result.input_tokens} | completion={result.output_tokens}\n")

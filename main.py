@@ -41,15 +41,15 @@ def cmd_ingest(args: argparse.Namespace) -> None:
 
 def cmd_ask(args: argparse.Namespace) -> None:
     from query.rag import ask
-    result = ask(args.question, verbose=args.verbose)
+    result = ask(args.question, verbose=args.verbose, model=args.model)
     print(result.answer)
     if args.verbose:
         print(f"\n[tokens] prompt={result.input_tokens} | completion={result.output_tokens}")
 
 
-def cmd_chat(_args: argparse.Namespace) -> None:
+def cmd_chat(args: argparse.Namespace) -> None:
     from query.rag import interactive_session
-    interactive_session()
+    interactive_session(model=args.model)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -72,10 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_ask = sub.add_parser("ask", help="Pose une question au pipeline RAG")
     p_ask.add_argument("question", help="Question en langage naturel")
     p_ask.add_argument("-v", "--verbose", action="store_true", help="Affiche les sources et l'usage API")
+    p_ask.add_argument("--model", default=None, help="Nom du modele LM Studio (ex: mistralai/ministral-3-3b)")
     p_ask.set_defaults(func=cmd_ask)
 
     # chat
     p_chat = sub.add_parser("chat", help="Session interactive")
+    p_chat.add_argument("--model", default=None, help="Nom du modele LM Studio (ex: mistralai/ministral-3-3b)")
     p_chat.set_defaults(func=cmd_chat)
 
     return parser
