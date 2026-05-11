@@ -1,29 +1,21 @@
 """
-Télécharge le texte du RGPD depuis EUR-Lex avec Playwright.
+Télécharge un référentiel réglementaire depuis EUR-Lex avec Playwright.
 
-EUR-Lex est protégé par AWS WAF : un vrai navigateur (Chromium headless)
-est nécessaire pour résoudre le challenge JS et récupérer le HTML.
-
-Pré-requis (une seule fois) :
-    playwright install chromium
+Usage :
+    fetch_source("rgpd")
+    fetch_source("dora")
 """
 
 import asyncio
 from pathlib import Path
 
+from ingest.sources import SOURCES, celex_url
+
 RAW_DIR = Path(__file__).parent.parent / "data" / "raw"
-RAW_FILE = RAW_DIR / "rgpd.html"
-
-EURLEX_URL = (
-    "https://eur-lex.europa.eu/legal-content/FR/TXT/HTML/"
-    "?uri=CELEX:32016R0679&from=FR"
-)
-
-# Sélecteur CSS du conteneur principal du texte réglementaire sur EUR-Lex
-CONTENT_SELECTOR = "#document1, .eli-main-title, .doc-ti"
+CONTENT_SELECTOR = "#document1, #docHtml, .eli-main-title"
 
 
-async def _fetch_with_playwright(url: str, output: Path) -> None:
+async def _fetch(url: str, output: Path) -> None:
     from playwright.async_api import async_playwright
 
     async with async_playwright() as p:
@@ -37,49 +29,42 @@ async def _fetch_with_playwright(url: str, output: Path) -> None:
             ),
         )
         page = await context.new_page()
-
-        print(f"[fetch] Navigation vers EUR-Lex…")
+        print(f"[fetch] Navigation vers EUR-Lex...")
         await page.goto(url, wait_until="networkidle", timeout=60_000)
-
-        # Attendre que le contenu réglementaire soit présent
         try:
             await page.wait_for_selector(CONTENT_SELECTOR, timeout=15_000)
         except Exception:
-            print("[fetch] Avertissement : sélecteur de contenu non trouvé, on sauvegarde quand même.")
-
+            pass
         html = await page.content()
         output.write_text(html, encoding="utf-8")
-        size_kb = output.stat().st_size // 1024
-        print(f"[fetch] Sauvegarde ({size_kb} Ko) -> {output}")
+        print(f"[fetch] Sauvegarde ({output.stat().st_size // 1024} Ko) -> {output}")
         await browser.close()
 
 
-def fetch_rgpd(force: bool = False) -> Path:
-    """Télécharge le HTML du RGPD si absent (ou si force=True).
+def fetch_source(source_key: str, force: bool = False) -> Path:
+    """Télécharge le HTML d'un référentiel depuis EUR-Lex.
 
-    Returns:
-        Chemin vers le fichier HTML sauvegardé.
+    Args:
+        source_key : clé dans SOURCES (ex. "rgpd", "dora")
+        force      : re-télécharge même si déjà présent
     """
+    if source_key not in SOURCES:
+        raise ValueError(f"Source inconnue '{source_key}'. Disponibles : {list(SOURCES)}")
+
+    source = SOURCES[source_key]
     RAW_DIR.mkdir(parents=True, exist_ok=True)
+    output = RAW_DIR / f"{source_key}.html"
+    url = celex_url(source["celex"])
 
-    if RAW_FILE.exists() and RAW_FILE.stat().st_size > 10_000 and not force:
-        print(f"[fetch] Déjà présent : {RAW_FILE}")
-        return RAW_FILE
+    if output.exists() and output.stat().st_size > 10_000 and not force:
+        print(f"[fetch] Deja present : {output}")
+        return output
 
+    print(f"[fetch] {source['name']} ({source['celex']})...")
     try:
-        asyncio.run(_fetch_with_playwright(EURLEX_URL, RAW_FILE))
+        asyncio.run(_fetch(url, output))
     except Exception as e:
-        print(
-            f"\n[fetch] Erreur Playwright : {e}\n"
-            "  -> Assurez-vous d'avoir lance : python -m playwright install chromium\n"
-            "  -> Ou telechargez manuellement le HTML de :\n"
-            f"    {EURLEX_URL}\n"
-            f"  -> et sauvegardez-le dans : {RAW_FILE}\n"
-        )
+        print(f"[fetch] Erreur : {e}")
         raise
 
-    return RAW_FILE
-
-
-if __name__ == "__main__":
-    fetch_rgpd()
+    return output

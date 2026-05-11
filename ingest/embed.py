@@ -1,8 +1,8 @@
 """
-Vectorise les chunks parsés et les stocke dans ChromaDB (mode local persistant).
+Vectorise les chunks parsés et les stocke dans ChromaDB.
 
-Modèle d'embedding : paraphrase-multilingual-mpnet-base-v2
-  → 768 dimensions, supporte le français nativement, ~400 Mo.
+Une seule collection "regulations" pour tous les référentiels.
+Le champ metadata "source" permet de filtrer par règlement.
 """
 
 import json
@@ -12,16 +12,17 @@ import chromadb
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 
-PARSED_FILE = Path(__file__).parent.parent / "data" / "parsed" / "rgpd.json"
+from ingest.sources import SOURCES
+
+PARSED_DIR = Path(__file__).parent.parent / "data" / "parsed"
 CHROMA_DIR = Path(__file__).parent.parent / "data" / "chroma"
 
-COLLECTION_NAME = "rgpd"
+COLLECTION_NAME = "regulations"
 EMBED_MODEL = "paraphrase-multilingual-mpnet-base-v2"
 BATCH_SIZE = 64
 
 
 def get_collection(chroma_dir: Path = CHROMA_DIR) -> chromadb.Collection:
-    """Retourne la collection ChromaDB (crée si absente)."""
     chroma_dir.mkdir(parents=True, exist_ok=True)
     client = chromadb.PersistentClient(
         path=str(chroma_dir),
@@ -33,27 +34,31 @@ def get_collection(chroma_dir: Path = CHROMA_DIR) -> chromadb.Collection:
     )
 
 
-def embed_and_store(
-    parsed_path: Path = PARSED_FILE,
-    chroma_dir: Path = CHROMA_DIR,
-    force: bool = False,
-) -> chromadb.Collection:
-    """Charge les chunks, les vectorise et les insère dans ChromaDB.
+def embed_source(source_key: str, force: bool = False) -> chromadb.Collection:
+    """Vectorise et indexe un référentiel dans la collection commune."""
+    if source_key not in SOURCES:
+        raise ValueError(f"Source inconnue '{source_key}'. Disponibles : {list(SOURCES)}")
 
-    Si force=False et que la collection est déjà peuplée, skip.
-    """
-    collection = get_collection(chroma_dir)
+    source = SOURCES[source_key]
+    parsed_path = PARSED_DIR / f"{source_key}.json"
 
-    if collection.count() > 0 and not force:
-        print(f"[embed] Collection '{COLLECTION_NAME}' déjà peuplée ({collection.count()} docs). "
-              "Utilisez force=True pour réindexer.")
-        return collection
+    if not parsed_path.exists():
+        raise FileNotFoundError(
+            f"Fichier JSON manquant : {parsed_path}\n"
+            f"Lancez d'abord : python main.py ingest --source {source_key} parse"
+        )
 
     chunks: list[dict] = json.loads(parsed_path.read_text(encoding="utf-8"))
-    if not chunks:
-        raise ValueError(f"Aucun chunk trouvé dans {parsed_path}. Lancez d'abord parse.py.")
+    collection = get_collection()
 
-    print(f"[embed] Chargement du modèle '{EMBED_MODEL}'…")
+    # Verifie si deja indexe
+    if not force:
+        existing = collection.get(where={"source": source["name"]}, limit=1)
+        if existing["ids"]:
+            print(f"[embed] {source['name']} deja indexe ({collection.count()} docs total). Utilisez --force pour reindexer.")
+            return collection
+
+    print(f"[embed] Chargement du modele '{EMBED_MODEL}'...")
     model = SentenceTransformer(EMBED_MODEL)
 
     texts = [c["text"] for c in chunks]
@@ -70,7 +75,7 @@ def embed_and_store(
         for c in chunks
     ]
 
-    print(f"[embed] Vectorisation de {len(texts)} chunks par batchs de {BATCH_SIZE}…")
+    print(f"[embed] Vectorisation de {len(texts)} chunks {source['name']}...")
     embeddings = model.encode(
         texts,
         batch_size=BATCH_SIZE,
@@ -78,7 +83,6 @@ def embed_and_store(
         normalize_embeddings=True,
     ).tolist()
 
-    # Upsert par batchs pour éviter les timeouts sur grandes collections
     for start in range(0, len(chunks), BATCH_SIZE):
         end = min(start + BATCH_SIZE, len(chunks))
         collection.upsert(
@@ -88,31 +92,28 @@ def embed_and_store(
             metadatas=metadatas[start:end],
         )
 
-    print(f"[embed] {collection.count()} vecteurs stockés dans '{CHROMA_DIR}'")
+    print(f"[embed] {source['name']} indexe. Total collection : {collection.count()} vecteurs.")
     return collection
 
 
 def search(
     query: str,
     n_results: int = 5,
-    filter_type: str | None = None,
+    filter_source: str | None = None,
     chroma_dir: Path = CHROMA_DIR,
 ) -> list[dict]:
-    """Recherche sémantique dans la collection.
+    """Recherche sémantique dans tous les référentiels (ou un seul).
 
     Args:
-        query       : question ou mots-clés
-        n_results   : nombre de résultats
-        filter_type : "article" | "recital" | None (tous)
-
-    Returns:
-        Liste de dicts {id, text, metadata, distance}
+        query         : question en langage naturel
+        n_results     : nombre de résultats
+        filter_source : "RGPD" | "DORA" | None (tous)
     """
     model = SentenceTransformer(EMBED_MODEL)
     query_embedding = model.encode([query], normalize_embeddings=True).tolist()
 
     collection = get_collection(chroma_dir)
-    where = {"type": filter_type} if filter_type else None
+    where = {"source": filter_source} if filter_source else None
 
     results = collection.query(
         query_embeddings=query_embedding,
@@ -121,16 +122,12 @@ def search(
         include=["documents", "metadatas", "distances"],
     )
 
-    hits = []
-    for i in range(len(results["ids"][0])):
-        hits.append({
+    return [
+        {
             "id": results["ids"][0][i],
             "text": results["documents"][0][i],
             "metadata": results["metadatas"][0][i],
             "distance": results["distances"][0][i],
-        })
-    return hits
-
-
-if __name__ == "__main__":
-    embed_and_store()
+        }
+        for i in range(len(results["ids"][0]))
+    ]

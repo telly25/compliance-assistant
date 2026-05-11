@@ -23,11 +23,11 @@ MAX_TOKENS = 1024
 N_RESULTS = 3
 
 SYSTEM_PROMPT = """\
-Tu es un assistant expert en conformite reglementaire, specialise dans le RGPD \
-(Reglement General sur la Protection des Donnees - UE 2016/679).
+Tu es un assistant expert en conformite reglementaire europeenne, specialise dans \
+le RGPD (UE 2016/679) et le DORA (UE 2022/2554 - Digital Operational Resilience Act).
 
 Tes reponses sont structurees, precises et operationnelles. Tu cites toujours \
-les articles pertinents. Tu n'inventes pas d'obligations qui n'existent pas dans \
+les articles pertinents avec leur source (RGPD ou DORA). Tu n'inventes pas d'obligations qui n'existent pas dans \
 les textes fournis.
 
 Format de reponse :
@@ -66,6 +66,7 @@ def ask(
     question: str,
     n_results: int = N_RESULTS,
     filter_type: str | None = None,
+    filter_source: str | None = None,
     verbose: bool = False,
     model: str | None = None,
 ) -> RAGResponse:
@@ -84,7 +85,12 @@ def ask(
     model = model or LM_STUDIO_MODEL
 
     # 1. Retrieval semantique
-    hits = search(question, n_results=n_results, filter_type=filter_type)
+    source_map = {"rgpd": "RGPD", "dora": "DORA"}
+    hits = search(
+        question,
+        n_results=n_results,
+        filter_source=source_map.get(filter_source) if filter_source else None,
+    )
     context = build_context(hits)
 
     if verbose:

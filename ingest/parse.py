@@ -1,15 +1,11 @@
 """
-Parse le HTML EUR-Lex du RGPD en chunks structurés.
+Parse le HTML EUR-Lex d'un référentiel en chunks structurés.
 
-Structure réelle EUR-Lex :
-  - Articles   : <div id="art_N">
-  - Titres     : <div id="art_N.tit_1">
-  - Chapitres  : <div id="cpt_I">, <div id="cpt_II">... (parent des articles)
-  - Considérants : <div id="rct_N">
-  - Contenu principal : <div id="docHtml">
-
-Produit une liste de dicts :
-  - id, type, number, title, chapter, chapter_title, text, source
+Structure EUR-Lex (commune à tous les règlements) :
+  - Articles    : <div id="art_N">
+  - Titres      : <div id="art_N.tit_1">
+  - Chapitres   : <div id="cpt_I">, <div id="cpt_II">...
+  - Considérants: <div id="rct_N">
 """
 
 import json
@@ -18,97 +14,89 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
-RAW_FILE = Path(__file__).parent.parent / "data" / "raw" / "rgpd.html"
-PARSED_FILE = Path(__file__).parent.parent / "data" / "parsed" / "rgpd.json"
+from ingest.sources import SOURCES
+
+RAW_DIR = Path(__file__).parent.parent / "data" / "raw"
+PARSED_DIR = Path(__file__).parent.parent / "data" / "parsed"
 
 
 def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _roman_to_int(s: str) -> int:
-    """Convertit un chiffre romain en entier (pour trier les chapitres)."""
-    vals = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
-    total, prev = 0, 0
-    for c in reversed(s.upper()):
-        v = vals.get(c, 0)
-        total += v if v >= prev else -v
-        prev = v
-    return total
+def _find_body(soup: BeautifulSoup):
+    for selector in [{"id": "docHtml"}, {"id": "document1"}, {"id": "TexteOnly"}]:
+        node = soup.find("div", selector)
+        if node:
+            return node
+    body = soup.body
+    if body is None:
+        raise ValueError("Contenu introuvable dans le HTML. Re-telechargez le fichier.")
+    return body
 
 
-def parse_html(html_path: Path = RAW_FILE) -> list[dict]:
+def parse_html(html_path: Path, source_name: str) -> list[dict]:
     soup = BeautifulSoup(
-        html_path.read_text(encoding="utf-8", errors="replace"),
-        "lxml",
+        html_path.read_text(encoding="utf-8", errors="replace"), "lxml"
     )
 
     chunks: list[dict] = []
 
-    # ── 1. Considérants ──────────────────────────────────────────────────────
+    # ── Considérants ─────────────────────────────────────────────────────────
     for div in soup.find_all("div", id=re.compile(r"^rct_\d+$")):
         number = re.sub(r"^rct_", "", div["id"])
         text = _clean(div.get_text(separator=" "))
-        # Supprimer le préfixe "(N)" du texte
         text = re.sub(r"^\(\d+\)\s*", "", text)
         if text:
             chunks.append({
-                "id": f"recital-{number}",
+                "id": f"{source_name.lower()}-recital-{number}",
                 "type": "recital",
                 "number": number,
                 "title": "",
                 "chapter": "",
                 "chapter_title": "",
                 "text": text,
-                "source": "RGPD",
+                "source": source_name,
             })
 
-    # ── 2. Articles ──────────────────────────────────────────────────────────
+    # ── Articles ──────────────────────────────────────────────────────────────
     for div in soup.find_all("div", id=re.compile(r"^art_\d+$")):
         number_raw = re.sub(r"^art_", "", div["id"])
         number = "1" if number_raw == "premier" else number_raw
 
-        # Titre de l'article (div frère ou enfant avec id="art_N.tit_1")
         tit_div = soup.find("div", id=f"{div['id']}.tit_1")
         title = _clean(tit_div.get_text()) if tit_div else ""
 
-        # Texte complet de l'article (sans répéter le titre)
         text = _clean(div.get_text(separator=" "))
-        # Supprimer le "Article N\nTitre\n" en tête
         text = re.sub(r"^Article\s+\S+\s*", "", text, flags=re.IGNORECASE)
         text = re.sub(r"^" + re.escape(title) + r"\s*", "", text) if title else text
         text = _clean(text)
 
-        # Chapitre parent
-        chapter_id = ""
-        chapter_title = ""
+        chapter_id, chapter_title = "", ""
         for parent in div.parents:
             pid = parent.get("id", "")
             if re.match(r"^cpt_[IVXLCDM]+$", pid, re.IGNORECASE):
                 chapter_id = re.sub(r"^cpt_", "", pid).upper()
-                # Titre du chapitre : premier <p> ou <div> enfant direct du cpt
-                first_text = parent.find(["p", "div", "span"], recursive=False)
-                if first_text:
-                    chapter_title = _clean(first_text.get_text())
+                first = parent.find(["p", "div", "span"], recursive=False)
+                if first:
                     chapter_title = re.sub(
                         r"^CHAPITRE\s+[IVXLCDM]+\s*[–—\-]?\s*", "",
-                        chapter_title, flags=re.IGNORECASE
+                        _clean(first.get_text()), flags=re.IGNORECASE
                     )
                 break
 
         if text:
             chunks.append({
-                "id": f"article-{number}",
+                "id": f"{source_name.lower()}-article-{number}",
                 "type": "article",
                 "number": number,
                 "title": title,
                 "chapter": chapter_id,
                 "chapter_title": chapter_title,
                 "text": text,
-                "source": "RGPD",
+                "source": source_name,
             })
 
-    # Tri final : considérants (par numéro) puis articles (par numéro)
     recitals = sorted(
         [c for c in chunks if c["type"] == "recital"],
         key=lambda c: int(c["number"]),
@@ -120,28 +108,30 @@ def parse_html(html_path: Path = RAW_FILE) -> list[dict]:
     return recitals + articles
 
 
-def parse_and_save(html_path: Path = RAW_FILE, out_path: Path = PARSED_FILE) -> list[dict]:
+def parse_source(source_key: str) -> list[dict]:
+    """Parse un référentiel et sauvegarde en JSON."""
+    if source_key not in SOURCES:
+        raise ValueError(f"Source inconnue '{source_key}'. Disponibles : {list(SOURCES)}")
+
+    source = SOURCES[source_key]
+    html_path = RAW_DIR / f"{source_key}.html"
+    out_path = PARSED_DIR / f"{source_key}.json"
+
     if not html_path.exists() or html_path.stat().st_size < 10_000:
         raise FileNotFoundError(
-            f"Fichier HTML manquant ou trop petit : {html_path}\n"
-            "Lancez d'abord : python main.py ingest fetch"
+            f"Fichier HTML manquant : {html_path}\n"
+            f"Lancez d'abord : python main.py ingest --source {source_key} fetch"
         )
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    chunks = parse_html(html_path)
+    PARSED_DIR.mkdir(parents=True, exist_ok=True)
+    chunks = parse_html(html_path, source["name"])
 
     if not chunks:
-        raise ValueError(
-            "Aucun chunk extrait. Inspectez data/raw/rgpd.html pour verifier le contenu."
-        )
+        raise ValueError(f"Aucun chunk extrait pour {source['name']}. Verifiez le HTML.")
 
     out_path.write_text(json.dumps(chunks, ensure_ascii=False, indent=2), encoding="utf-8")
     articles = sum(1 for c in chunks if c["type"] == "article")
     recitals = sum(1 for c in chunks if c["type"] == "recital")
-    print(f"[parse] {len(chunks)} chunks extraits -- {articles} articles, {recitals} considerants")
+    print(f"[parse] {source['name']} : {len(chunks)} chunks -- {articles} articles, {recitals} considerants")
     print(f"[parse] Sauvegarde -> {out_path}")
     return chunks
-
-
-if __name__ == "__main__":
-    parse_and_save()
