@@ -16,8 +16,6 @@ Usage :
 """
 
 import argparse
-import os
-import sys
 from pathlib import Path
 
 
@@ -38,31 +36,16 @@ def cmd_ingest(args: argparse.Namespace) -> None:
 
 
 def cmd_ask(args: argparse.Namespace) -> None:
-    _check_api_key()
     from query.rag import ask
     result = ask(args.question, verbose=args.verbose)
     print(result.answer)
     if args.verbose:
-        print(
-            f"\n[usage] input={result.input_tokens} | output={result.output_tokens} "
-            f"| cache_read={result.cache_read_tokens}"
-        )
+        print(f"\n[tokens] prompt={result.input_tokens} | completion={result.output_tokens}")
 
 
 def cmd_chat(_args: argparse.Namespace) -> None:
-    _check_api_key()
     from query.rag import interactive_session
     interactive_session()
-
-
-def _check_api_key() -> None:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print(
-            "[erreur] La variable d'environnement ANTHROPIC_API_KEY est manquante.\n"
-            "  -> export ANTHROPIC_API_KEY=sk-ant-...",
-            file=sys.stderr,
-        )
-        sys.exit(1)
 
 
 def build_parser() -> argparse.ArgumentParser:

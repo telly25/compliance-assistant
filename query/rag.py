@@ -1,38 +1,41 @@
 """
-Pipeline RAG : retrieval sémantique + génération via Claude API.
+Pipeline RAG : retrieval semantique + generation via LM Studio (local).
 
-Utilise le prompt caching d'Anthropic sur le contexte récupéré pour
-réduire la latence et les coûts lors de questions répétées sur les mêmes articles.
+LM Studio expose une API compatible OpenAI sur http://localhost:1234/v1.
+Aucune cle API ni connexion internet requise pour la generation.
+
+Pour changer de modele : modifier LM_STUDIO_MODEL ou passer model= a ask().
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 
-import anthropic
+from openai import OpenAI
 
 from ingest.embed import search
 
-MODEL = "claude-sonnet-4-6"
+# Modele charge dans LM Studio — adapter au modele que tu as charge
+LM_STUDIO_MODEL = os.environ.get("LM_MODEL", "mistral")
+LM_STUDIO_URL = os.environ.get("LM_URL", "http://localhost:1234/v1")
 MAX_TOKENS = 2048
-N_RESULTS = 6  # articles/considérants récupérés par requête
+N_RESULTS = 6
 
 SYSTEM_PROMPT = """\
-Tu es un assistant expert en conformité réglementaire, spécialisé dans le RGPD \
-(Règlement Général sur la Protection des Données — UE 2016/679).
+Tu es un assistant expert en conformite reglementaire, specialise dans le RGPD \
+(Reglement General sur la Protection des Donnees - UE 2016/679).
 
-Tes réponses sont structurées, précises et opérationnelles. Tu cites toujours \
+Tes reponses sont structurees, precises et operationnelles. Tu cites toujours \
 les articles pertinents. Tu n'inventes pas d'obligations qui n'existent pas dans \
 les textes fournis.
 
-Format de réponse par défaut :
-1. **Synthèse** — résumé en 2-3 phrases
-2. **Obligations applicables** — liste des exigences concrètes
-3. **Checklist opérationnelle** — actions à mener
-4. **Articles de référence** — numéros et titres des articles cités
-5. **Points d'attention** — risques ou zones grises éventuels
+Format de reponse :
+1. **Synthese** - resume en 2-3 phrases
+2. **Obligations applicables** - liste des exigences concretes
+3. **Checklist operationnelle** - actions a mener
+4. **Articles de reference** - numeros et titres des articles cites
+5. **Points d'attention** - risques ou zones grises eventuels
 """
 
 
@@ -42,18 +45,16 @@ class RAGResponse:
     sources: list[dict]
     input_tokens: int
     output_tokens: int
-    cache_read_tokens: int
 
 
 def build_context(hits: list[dict]) -> str:
-    """Formate les chunks récupérés en contexte lisible pour le LLM."""
     parts = []
     for h in hits:
         meta = h["metadata"]
         label = (
-            f"Article {meta['number']} — {meta['title']}"
+            f"Article {meta['number']} - {meta['title']}"
             if meta["type"] == "article"
-            else f"Considérant {meta['number']}"
+            else f"Considerant {meta['number']}"
         )
         if meta.get("chapter"):
             label += f" (Chapitre {meta['chapter']} : {meta['chapter_title']})"
@@ -66,75 +67,69 @@ def ask(
     n_results: int = N_RESULTS,
     filter_type: str | None = None,
     verbose: bool = False,
+    model: str = LM_STUDIO_MODEL,
 ) -> RAGResponse:
     """Pose une question au pipeline RAG.
 
     Args:
         question    : question en langage naturel
-        n_results   : nombre d'extraits RGPD récupérés
-        filter_type : restreindre à "article" ou "recital"
+        n_results   : nombre d'extraits RGPD recuperes
+        filter_type : restreindre a "article" ou "recital"
         verbose     : affiche les sources dans le terminal
+        model       : nom du modele charge dans LM Studio
 
     Returns:
-        RAGResponse avec la réponse et les métadonnées d'usage
+        RAGResponse avec la reponse et les tokens utilises
     """
-    # 1. Retrieval
+    # 1. Retrieval semantique
     hits = search(question, n_results=n_results, filter_type=filter_type)
     context = build_context(hits)
 
     if verbose:
-        print("\n── Sources récupérées ──────────────────────────────")
+        print("\n-- Sources recuperees --")
         for h in hits:
             meta = h["metadata"]
-            label = f"Article {meta['number']}" if meta["type"] == "article" else f"Considérant {meta['number']}"
-            print(f"  [{h['id']}] {label} (distance={h['distance']:.3f})")
-        print("────────────────────────────────────────────────────\n")
+            label = (
+                f"Article {meta['number']}"
+                if meta["type"] == "article"
+                else f"Considerant {meta['number']}"
+            )
+            print(f"  [{h['id']}] {label} (score={1 - h['distance']:.3f})")
+        print()
 
-    # 2. Génération avec prompt caching sur le contexte
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    # 2. Generation via LM Studio (API OpenAI-compatible, 100% local)
+    client = OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio")
 
-    response = client.messages.create(
-        model=MODEL,
+    response = client.chat.completions.create(
+        model=model,
         max_tokens=MAX_TOKENS,
-        system=SYSTEM_PROMPT,
         messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": [
-                    # Le contexte RGPD est mis en cache (min 1024 tokens pour activer le cache)
-                    {
-                        "type": "text",
-                        "text": (
-                            f"Voici les extraits du RGPD pertinents pour ta réponse :\n\n"
-                            f"{context}\n\n"
-                            "---\n"
-                        ),
-                        "cache_control": {"type": "ephemeral"},
-                    },
-                    {
-                        "type": "text",
-                        "text": f"Question : {question}",
-                    },
-                ],
-            }
+                "content": (
+                    f"Voici les extraits du RGPD pertinents pour ta reponse :\n\n"
+                    f"{context}\n\n"
+                    "---\n"
+                    f"Question : {question}"
+                ),
+            },
         ],
     )
 
     usage = response.usage
-    cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
-
     return RAGResponse(
-        answer=response.content[0].text,
+        answer=response.choices[0].message.content,
         sources=hits,
-        input_tokens=usage.input_tokens,
-        output_tokens=usage.output_tokens,
-        cache_read_tokens=cache_read,
+        input_tokens=usage.prompt_tokens if usage else 0,
+        output_tokens=usage.completion_tokens if usage else 0,
     )
 
 
 def interactive_session() -> None:
-    """Lance une session de questions-réponses interactives."""
-    print("Assistant conformité RGPD — tapez 'quitter' pour arrêter.\n")
+    """Lance une session de questions-reponses interactives."""
+    print(f"Assistant conformite RGPD | modele : {LM_STUDIO_MODEL} | {LM_STUDIO_URL}")
+    print("Tapez 'quitter' pour arreter.\n")
     while True:
         try:
             question = input("Votre question : ").strip()
@@ -148,10 +143,7 @@ def interactive_session() -> None:
         if not question:
             continue
 
-        print("\n[…] Recherche en cours…\n")
+        print("\n[...] Recherche en cours...\n")
         result = ask(question, verbose=True)
         print(result.answer)
-        print(
-            f"\n[usage] in={result.input_tokens} | out={result.output_tokens} "
-            f"| cache_read={result.cache_read_tokens}\n"
-        )
+        print(f"\n[tokens] prompt={result.input_tokens} | completion={result.output_tokens}\n")
