@@ -280,7 +280,19 @@
             thinking.appendChild(tags)
           }
 
+          if (data.type === 'thinking') {
+            if (!thinking.querySelector('.thinking-label')) {
+              const label = document.createElement('span')
+              label.className = 'thinking-label'
+              label.textContent = ' · réflexion en cours…'
+              thinking.appendChild(label)
+            }
+          }
+
           if (data.type === 'token') {
+            // La reponse arrive : on retire l'indicateur de reflexion
+            const label = thinking.querySelector('.thinking-label')
+            if (label) label.remove()
             fullText += data.token
             bubble.innerHTML = renderMarkdownLite(fullText)
             bubble.appendChild(cursor)
@@ -290,6 +302,9 @@
           if (data.type === 'done') {
             cursor.remove()
             bubble.innerHTML = renderMarkdownLite(fullText)
+            if (!fullText) {
+              bubble.innerHTML = '<em style="color:#94a3b8">Aucune réponse générée. Essayez un autre modèle.</em>'
+            }
           }
         }
       }

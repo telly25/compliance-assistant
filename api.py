@@ -93,9 +93,15 @@ def ask_stream(req: AskRequest):
 
         for chunk in stream:
             delta = chunk.choices[0].delta
-            token = delta.content or ""
-            if token:
-                yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+            content = delta.content or ""
+            reasoning = getattr(delta, "reasoning_content", None) or ""
+
+            # Reponse finale (Mistral, LLaMA, etc.)
+            if content:
+                yield f"data: {json.dumps({'type': 'token', 'token': content})}\n\n"
+            # Reflexion interne Qwen3 — envoyee separement pour affichage discret
+            elif reasoning:
+                yield f"data: {json.dumps({'type': 'thinking'})}\n\n"
 
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
