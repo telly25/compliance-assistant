@@ -1,208 +1,145 @@
 """
 Parse le HTML EUR-Lex du RGPD en chunks structurés.
 
-Produit une liste de dicts avec les champs :
-  - id          : identifiant unique  (ex. "article-6", "recital-47")
-  - type        : "recital" | "article" | "annex"
-  - number      : numéro (str)
-  - title       : titre de l'article (peut être vide pour les considérants)
-  - chapter     : numéro du chapitre parent (str, peut être vide)
-  - chapter_title: titre du chapitre parent
-  - text        : texte brut du chunk
-  - source      : "RGPD"
+Structure réelle EUR-Lex :
+  - Articles   : <div id="art_N">
+  - Titres     : <div id="art_N.tit_1">
+  - Chapitres  : <div id="cpt_I">, <div id="cpt_II">... (parent des articles)
+  - Considérants : <div id="rct_N">
+  - Contenu principal : <div id="docHtml">
+
+Produit une liste de dicts :
+  - id, type, number, title, chapter, chapter_title, text, source
 """
 
 import json
 import re
 from pathlib import Path
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
 
 RAW_FILE = Path(__file__).parent.parent / "data" / "raw" / "rgpd.html"
 PARSED_FILE = Path(__file__).parent.parent / "data" / "parsed" / "rgpd.json"
 
 
-# ── helpers ──────────────────────────────────────────────────────────────────
-
 def _clean(text: str) -> str:
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+    return re.sub(r"\s+", " ", text).strip()
 
 
-def _is_article_heading(tag: Tag) -> tuple[str, str] | None:
-    """Retourne (numero, titre) si le tag est un titre d'article, sinon None."""
-    text = _clean(tag.get_text())
-    m = re.match(r"^Article\s+(\d+)\s*[–—-]?\s*(.*)", text, re.IGNORECASE)
-    if m:
-        return m.group(1), _clean(m.group(2))
-    return None
+def _roman_to_int(s: str) -> int:
+    """Convertit un chiffre romain en entier (pour trier les chapitres)."""
+    vals = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+    total, prev = 0, 0
+    for c in reversed(s.upper()):
+        v = vals.get(c, 0)
+        total += v if v >= prev else -v
+        prev = v
+    return total
 
-
-def _is_chapter_heading(tag: Tag) -> tuple[str, str] | None:
-    text = _clean(tag.get_text())
-    m = re.match(r"^CHAPITRE\s+([IVXLCDM\d]+)\s*[–—-]?\s*(.*)", text, re.IGNORECASE)
-    if m:
-        return m.group(1), _clean(m.group(2))
-    return None
-
-
-def _is_recital_heading(tag: Tag) -> str | None:
-    """Retourne le numéro si le tag est un numéro de considérant, sinon None."""
-    text = _clean(tag.get_text())
-    m = re.match(r"^\((\d+)\)$", text)
-    if m:
-        return m.group(1)
-    return None
-
-
-# ── parsers principaux ────────────────────────────────────────────────────────
 
 def parse_html(html_path: Path = RAW_FILE) -> list[dict]:
-    soup = BeautifulSoup(html_path.read_bytes(), "html.parser")
+    soup = BeautifulSoup(
+        html_path.read_text(encoding="utf-8", errors="replace"),
+        "lxml",
+    )
 
     chunks: list[dict] = []
-    current_chapter = ""
-    current_chapter_title = ""
 
-    # EUR-Lex structure : le contenu est dans des divs/p avec classes spécifiques.
-    # On itère sur tous les éléments block en ordre document.
-    body = soup.find("div", {"id": "document1"}) or soup.body
+    # ── 1. Considérants ──────────────────────────────────────────────────────
+    for div in soup.find_all("div", id=re.compile(r"^rct_\d+$")):
+        number = re.sub(r"^rct_", "", div["id"])
+        text = _clean(div.get_text(separator=" "))
+        # Supprimer le préfixe "(N)" du texte
+        text = re.sub(r"^\(\d+\)\s*", "", text)
+        if text:
+            chunks.append({
+                "id": f"recital-{number}",
+                "type": "recital",
+                "number": number,
+                "title": "",
+                "chapter": "",
+                "chapter_title": "",
+                "text": text,
+                "source": "RGPD",
+            })
 
-    paragraphs = body.find_all(["p", "div", "h1", "h2", "h3", "h4"], recursive=True)
+    # ── 2. Articles ──────────────────────────────────────────────────────────
+    for div in soup.find_all("div", id=re.compile(r"^art_\d+$")):
+        number_raw = re.sub(r"^art_", "", div["id"])
+        number = "1" if number_raw == "premier" else number_raw
 
-    i = 0
-    # ── Phase 1 : considérants ──────────────────────────────────────────────
-    recital_buffer: list[str] = []
-    recital_number = ""
-    in_recitals = False
+        # Titre de l'article (div frère ou enfant avec id="art_N.tit_1")
+        tit_div = soup.find("div", id=f"{div['id']}.tit_1")
+        title = _clean(tit_div.get_text()) if tit_div else ""
 
-    # ── Phase 2 : articles ──────────────────────────────────────────────────
-    article_buffer: list[str] = []
-    article_number = ""
-    article_title = ""
-    in_articles = False
+        # Texte complet de l'article (sans répéter le titre)
+        text = _clean(div.get_text(separator=" "))
+        # Supprimer le "Article N\nTitre\n" en tête
+        text = re.sub(r"^Article\s+\S+\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"^" + re.escape(title) + r"\s*", "", text) if title else text
+        text = _clean(text)
 
-    for tag in paragraphs:
-        if tag.find_parent(["p", "div"]) and tag.name in ["p", "div"]:
-            # évite la double-capture des éléments imbriqués
-            parent = tag.parent
-            if parent and parent.name in ["p", "div"] and parent in paragraphs:
-                continue
+        # Chapitre parent
+        chapter_id = ""
+        chapter_title = ""
+        for parent in div.parents:
+            pid = parent.get("id", "")
+            if re.match(r"^cpt_[IVXLCDM]+$", pid, re.IGNORECASE):
+                chapter_id = re.sub(r"^cpt_", "", pid).upper()
+                # Titre du chapitre : premier <p> ou <div> enfant direct du cpt
+                first_text = parent.find(["p", "div", "span"], recursive=False)
+                if first_text:
+                    chapter_title = _clean(first_text.get_text())
+                    chapter_title = re.sub(
+                        r"^CHAPITRE\s+[IVXLCDM]+\s*[–—\-]?\s*", "",
+                        chapter_title, flags=re.IGNORECASE
+                    )
+                break
 
-        text = _clean(tag.get_text())
-        if not text:
-            continue
+        if text:
+            chunks.append({
+                "id": f"article-{number}",
+                "type": "article",
+                "number": number,
+                "title": title,
+                "chapter": chapter_id,
+                "chapter_title": chapter_title,
+                "text": text,
+                "source": "RGPD",
+            })
 
-        # ── Détection chapitre ──
-        chapter_match = _is_chapter_heading(tag)
-        if chapter_match:
-            # flush article en cours
-            if article_buffer and article_number:
-                chunks.append(_make_article(
-                    article_number, article_title,
-                    current_chapter, current_chapter_title,
-                    article_buffer
-                ))
-                article_buffer, article_number, article_title = [], "", ""
-            current_chapter, current_chapter_title = chapter_match
-            in_articles = True
-            continue
-
-        # ── Détection article ──
-        article_match = _is_article_heading(tag)
-        if article_match:
-            if article_buffer and article_number:
-                chunks.append(_make_article(
-                    article_number, article_title,
-                    current_chapter, current_chapter_title,
-                    article_buffer
-                ))
-            article_number, article_title = article_match
-            article_buffer = []
-            in_articles = True
-            in_recitals = False
-            continue
-
-        # ── Détection début des considérants ──
-        if re.match(r"ONT ARRÊTÉ LE PRÉSENT RÈGLEMENT|considérant ce qui suit", text, re.IGNORECASE):
-            in_recitals = True
-            in_articles = False
-            continue
-
-        # ── Fin des considérants (début de la partie normative) ──
-        if re.match(r"^CHAPITRE I", text, re.IGNORECASE):
-            if recital_buffer and recital_number:
-                chunks.append(_make_recital(recital_number, recital_buffer))
-                recital_buffer, recital_number = [], ""
-            in_recitals = False
-            in_articles = True
-            current_chapter = "I"
-            current_chapter_title = "DISPOSITIONS GÉNÉRALES"
-            continue
-
-        # ── Accumulation considérants ──
-        if in_recitals:
-            recital_num = _is_recital_heading(tag)
-            if recital_num:
-                if recital_buffer and recital_number:
-                    chunks.append(_make_recital(recital_number, recital_buffer))
-                recital_number = recital_num
-                recital_buffer = []
-            elif recital_number:
-                recital_buffer.append(text)
-            continue
-
-        # ── Accumulation articles ──
-        if in_articles and article_number:
-            article_buffer.append(text)
-
-    # flush final
-    if recital_buffer and recital_number:
-        chunks.append(_make_recital(recital_number, recital_buffer))
-    if article_buffer and article_number:
-        chunks.append(_make_article(
-            article_number, article_title,
-            current_chapter, current_chapter_title,
-            article_buffer
-        ))
-
-    return chunks
-
-
-def _make_article(number, title, chapter, chapter_title, lines) -> dict:
-    return {
-        "id": f"article-{number}",
-        "type": "article",
-        "number": number,
-        "title": title,
-        "chapter": chapter,
-        "chapter_title": chapter_title,
-        "text": " ".join(lines),
-        "source": "RGPD",
-    }
-
-
-def _make_recital(number, lines) -> dict:
-    return {
-        "id": f"recital-{number}",
-        "type": "recital",
-        "number": number,
-        "title": "",
-        "chapter": "",
-        "chapter_title": "",
-        "text": " ".join(lines),
-        "source": "RGPD",
-    }
+    # Tri final : considérants (par numéro) puis articles (par numéro)
+    recitals = sorted(
+        [c for c in chunks if c["type"] == "recital"],
+        key=lambda c: int(c["number"]),
+    )
+    articles = sorted(
+        [c for c in chunks if c["type"] == "article"],
+        key=lambda c: int(c["number"]) if c["number"].isdigit() else 0,
+    )
+    return recitals + articles
 
 
 def parse_and_save(html_path: Path = RAW_FILE, out_path: Path = PARSED_FILE) -> list[dict]:
+    if not html_path.exists() or html_path.stat().st_size < 10_000:
+        raise FileNotFoundError(
+            f"Fichier HTML manquant ou trop petit : {html_path}\n"
+            "Lancez d'abord : python main.py ingest fetch"
+        )
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     chunks = parse_html(html_path)
+
+    if not chunks:
+        raise ValueError(
+            "Aucun chunk extrait. Inspectez data/raw/rgpd.html pour verifier le contenu."
+        )
+
     out_path.write_text(json.dumps(chunks, ensure_ascii=False, indent=2), encoding="utf-8")
     articles = sum(1 for c in chunks if c["type"] == "article")
     recitals = sum(1 for c in chunks if c["type"] == "recital")
-    print(f"[parse] {len(chunks)} chunks extraits — {articles} articles, {recitals} considérants")
-    print(f"[parse] Sauvegardé → {out_path}")
+    print(f"[parse] {len(chunks)} chunks extraits -- {articles} articles, {recitals} considerants")
+    print(f"[parse] Sauvegarde -> {out_path}")
     return chunks
 
 

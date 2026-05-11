@@ -59,7 +59,7 @@ def _check_api_key() -> None:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print(
             "[erreur] La variable d'environnement ANTHROPIC_API_KEY est manquante.\n"
-            "  → export ANTHROPIC_API_KEY=sk-ant-…",
+            "  -> export ANTHROPIC_API_KEY=sk-ant-...",
             file=sys.stderr,
         )
         sys.exit(1)
