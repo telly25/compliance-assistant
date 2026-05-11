@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Données locales (volumineuses ou sensibles)
+data/
+
+# Env
+.env
+*.env
+
+# IDE
+.vscode/
+.idea/
