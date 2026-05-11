@@ -3,8 +3,9 @@ playwright>=1.44.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
 
-# Embeddings via Mistral API (remplace sentence-transformers)
+# APIs LLM
 openai>=1.30.0
+mistralai>=1.0.0
 
 # Vector store local
 chromadb>=0.5.0
